@@ -25,4 +25,4 @@ sendmail_path=/hectane/hectanemail
 ```
 
 # 3
-Resart your apache2/nginx .. and enjoy your php mail being deliverd now!# hectanemail
+Resart your apache2/nginx .. and enjoy your php mail being deliverd now!
