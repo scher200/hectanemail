@@ -1,0 +1,326 @@
+#!/usr/bin/php
+<?php
+
+/// !! !! !!!! !! !!!! !! !!!! !! !!!! !! !!!! !! !!!! !! !!!! !! !!!! !! !!!! !! !!!! !! !! ///
+//                                                                                            //
+// This script must be called from php.ini or any /etc/php/conf.d/custom.ini                  //
+// Something like:                                                                            //
+// [mail function]                                                                            //
+// sendmail_path=/usr/local/bin/hectanemail                                                   //
+//                                                                                            //
+// Please configure here below: private static $defaults, to set host/port/user/pass          //
+//                                                                                            //
+/// !! !! !!!! !! !!!! !! !!!! !! !!!! !! !!!! !! !!!! !! !!!! !! !!!! !! !!!! !! !!!! !! !! ///
+
+/**
+ * Manage settings for the plugin including the page that allows the connection
+ * settings to be configured.
+ */
+class HectaneSettings {
+
+    /**
+     * Default values for all options.
+     */
+    private static $defaults = array(
+        'host' => 'localhost',
+        'port' => '8025',
+        'tls' => '0',
+        'tls_ignore' => '1', // '1' is good for many cases
+        'username' => 'yourusername',
+        'password' => 'yourpassword',
+        'wrapperlog' => '/tmp/hectane_php.log', // set it to '', and disable write to log file at all
+        'alternative_from' => 'webmaster@server.com', // set it to a domain that points to the hectane server
+        'debug' => true, // set to true on debugging
+    );
+
+    /**
+     * Obtain the current value for the specified option.
+     */
+    public static function get($name) {
+        return self::$defaults[$name];
+    }
+
+}
+
+
+/**
+ * Facilitate communication with the Hectane API.
+ */
+class HectaneAPI {
+
+    /**
+     * Global instance of the API.
+     */
+    private static $instance;
+    public $errors = "";
+
+    /**
+     * Retrieve the global instance, creating it if necessary.
+     */
+    public static function instance() {
+        if(self::$instance === null) {
+            self::$instance = new HectaneAPI();
+        }
+        return self::$instance;
+    }
+
+    /**
+     * Remember if the cURL PHP extension is installed.
+     */
+    private $have_curl = false;
+
+    /**
+     * Build a cURL handle for the specified API method.
+     */
+    private function build($method) {
+        $url = sprintf(
+            'http%s://%s:%s/v1%s',
+            HectaneSettings::get('tls') ? 's' : '',
+            HectaneSettings::get('host'),
+            HectaneSettings::get('port'),
+            $method
+        );
+        $ch = curl_init();
+        curl_setopt($ch, CURLOPT_URL, $url);
+        curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+        $u = HectaneSettings::get('username');
+        $p = HectaneSettings::get('password');
+        if($u !== '' && $p !== '') {
+            curl_setopt($ch, CURLOPT_HTTPAUTH, CURLAUTH_BASIC);
+            curl_setopt($ch, CURLOPT_USERPWD, "$u:$p");
+        }
+        if(HectaneSettings::get('tls_ignore')) {
+            curl_setopt($ch, CURLOPT_SSL_VERIFYHOST, false);
+            curl_setopt($ch, CURLOPT_SSL_VERIFYPEER, false);
+        }
+        return $ch;
+    }
+
+    /**
+     * Check for the cURL extension.
+     */
+    public function __construct() {
+        if(!extension_loaded('curl')) {
+        	$this->have_curl = false;
+            $this->show_error();
+        } else {
+            $this->have_curl = true;
+        }
+    }
+
+    /**
+     * Show an error message for the cURL extension.
+     */
+    public function show_error() {
+        $this->errors .= "\r\n**The cURL PHP extension is required to use Hectane.**\r\n";
+    }
+
+    /**
+     * Attempt to send the specified email with Hectane.
+     *
+     * The $email parameter is expected to be an array with the same parameters
+     * that /v1/send expects. A boolean is returned indicating success or
+     * failure.
+     */
+    public function send($email) {
+
+        if(!$this->have_curl) {
+            return false;
+        }
+        $ch = $this->build('/send');
+        curl_setopt($ch, CURLOPT_HTTPHEADER, array(
+            'Content-Type' => 'application/json',
+        ));
+        curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($email));
+        $result = json_decode(curl_exec($ch), true);
+
+        if( isset($result['error']) )
+            $this->errors .= $result['error'];
+
+        return $result !== null && is_array($result) && !isset($result['error']);
+
+    }
+
+    /**
+     * Retrieve the current version of Hectane.
+     *
+     * The version is returned as a string or the value "false" if an error
+     * occurs while making the API call.
+     */
+    public function version() {
+        if(!$this->have_curl) {
+            return false;
+        }
+        $result = json_decode(curl_exec($this->build('/version')), true);
+        if($result !== null && is_array($result) && isset($result['version'])) {
+            return $result['version'];
+        } else {
+            return false;
+        }
+    }
+}
+
+
+/**
+ * Hectaine class with main functions
+ * Takes its goods from HectaineSettings and the Hectaine_API
+ */
+class Hectane{
+
+    public $email="empty";
+
+    public function __construct( $to, $subject, $message, $headers='', $attachments=array() ) {
+
+		return $this->mail($to, $subject, $message, $headers, $attachments);
+
+    }    
+
+    /**
+     * Determine if a message contains HTML.
+     */
+    public function hectane_isMessageHtml($message) {
+        $tStart = strpos($message, '<');
+        $tEnd = strpos($message, '>');
+        if($tStart === 0 && $tEnd > 1) {
+            $HMTL_ELEMENTS = array('!DOCTYPE'=>1, 'A'=>1, 'ABBR'=>1, 'ACRONYM'=>1, 'ADDRESS'=>1, 'APPLET'=>1, 'AREA'=>1, 'ARTICLE'=>1, 'ASIDE'=>1, 'AUDIO'=>1, 'B'=>1, 'BASE'=>1, 'BASEFONT'=>1, 'BDI'=>1, 'BDO'=>1, 'BIG'=>1, 'BLOCKQUOTE'=>1, 'BODY'=>1, 'BR'=>1, 'BUTTON'=>1, 'CANVAS'=>1, 'CAPTION'=>1, 'CENTER'=>1, 'CITE'=>1, 'CODE'=>1, 'COL'=>1, 'COLGROUP'=>1, 'DATALIST'=>1, 'DD'=>1, 'DEL'=>1, 'DETAILS'=>1, 'DFN'=>1, 'DIALOG'=>1, 'DIR'=>1, 'DIV'=>1, 'DL'=>1, 'DT'=>1, 'EM'=>1, 'EMBED'=>1, 'FIELDSET'=>1, 'FIGCAPTION'=>1, 'FIGURE'=>1, 'FONT'=>1, 'FOOTER'=>1, 'FORM'=>1, 'FRAME'=>1, 'FRAMESET'=>1, 'H1'=>1, 'HEAD'=>1, 'HEADER'=>1, 'HR'=>1, 'HTML'=>1, 'I'=>1, 'IFRAME'=>1, 'IMG'=>1, 'INPUT'=>1, 'INS'=>1, 'KBD'=>1, 'KEYGEN'=>1, 'LABEL'=>1, 'LEGEND'=>1, 'LI'=>1, 'LINK'=>1, 'MAIN'=>1, 'MAP'=>1, 'MARK'=>1, 'MENU'=>1, 'MENUITEM'=>1, 'META'=>1, 'METER'=>1, 'NAV'=>1, 'NOFRAMES'=>1, 'NOSCRIPT'=>1, 'OBJECT'=>1, 'OL'=>1, 'OPTGROUP'=>1, 'OPTION'=>1, 'OUTPUT'=>1, 'P'=>1, 'PARAM'=>1, 'PRE'=>1, 'PROGRESS'=>1, 'Q'=>1, 'RP'=>1, 'RT'=>1, 'RUBY'=>1, 'S'=>1, 'SAMP'=>1, 'SCRIPT'=>1, 'SECTION'=>1, 'SELECT'=>1, 'SMALL'=>1, 'SOURCE'=>1, 'SPAN'=>1, 'STRIKE'=>1, 'STRONG'=>1, 'STYLE'=>1, 'SUB'=>1, 'SUMMARY'=>1, 'SUP'=>1, 'TABLE'=>1, 'TBODY'=>1, 'TD'=>1, 'TEXTAREA'=>1, 'TFOOT'=>1, 'TH'=>1, 'THEAD'=>1, 'TIME'=>1, 'TITLE'=>1, 'TR'=>1, 'TRACK'=>1, 'TT'=>1, 'U'=>1, 'UL'=>1, 'VAR'=>1, 'VIDEO'=>1, 'WBR'=>1 );
+            $fullTag = substr($message, $tStart + 1, $tEnd - $tStart - 1);
+            $tag = strtoupper(explode(' ', $fullTag, 2)[0]);
+            return isset($HMTL_ELEMENTS[$tag]);
+        }
+        return false;
+    }
+
+    /**
+     * Return the content of email's 'From' field.
+     */
+    public function hectane_emailFrom($headers) {
+        if( isset($headers['From']) ){
+            return $headers['From'];
+        }
+        elseif( isset($headers['FROM']) ){
+            return $headers['FROM'];
+        }
+        elseif( isset($headers['from']) ){
+            return $headers['from'];
+        }
+        else {
+            return HectaneSettings::get('alternative_from');
+        }
+    }
+
+    /**
+     * Override the default implementation of mail.
+     *
+     * This function is responsible for marshalling the parameters into the JSON
+     * data that is sent to Hectane.
+     */
+    public function mail($message, $headers='', $attachments=array()) {
+
+        $to = $headers['To'];
+        $subject = $headers['Subject'];
+        unset($headers['To']);
+        unset($headers['Subject']);
+
+        if(!is_array($to)) {
+            $to = array($to);
+        }
+
+        $from = $this->hectane_emailFrom($headers);
+        unset($headers['From']);
+        $email = array(
+            'from' => $from,
+            'to' => is_array($to) ? $to : array($to),
+            'subject' => $subject,
+            'headers' => $headers ? $headers : new stdClass()
+        );
+        if ($this->hectane_isMessageHtml($message)) {
+            $email['html'] = $message;
+        }
+        else {
+            $email['text'] = $message;        
+        }
+
+        $this->email = $email; // for debug
+
+        // send it away
+        return HectaneAPI::instance()->send($email);
+
+    }
+
+}
+
+
+/// Main Program ///
+
+// Set logfile
+$logfile = HectaneSettings::get('wrapperlog');
+
+// Get the email content
+$pointer = fopen('php://stdin', 'r');
+
+// Clean start
+$headers = array();
+$message = "";
+$attachments = array(); // TODO: do not work yet
+
+// Parse the header and the messages
+while ($line = fgets($pointer)) {
+    
+    
+    if( $line == "" || $line == "\r\n" || $line == "\n\r" || strlen($line) <= 2 ){ // if zero line found
+
+        // go grab message
+        $logline .= "<!-- BEGIN Message -->\r\n";
+        while ($line = fgets($pointer)) {
+			$message .= $line;
+            $logline .= trim($line)."\r\n";
+        }
+        $logline .= "<!-- END Message -->\r\n";
+    
+    }else{ 
+
+        // go and get header element like: from, to, subject ..
+        $head = trim(  substr( $line, 0, strpos($line, ": ") )  );
+        $content_raw = str_replace( $head.": ", "", $line);
+        $content = trim(  str_replace( array("\r\n", "\n\r", "\r", "\n"), " ", $content_raw )  );
+
+        if( $head == "Subject" || $head == "SUBJECT" || $head == "subject" ){
+            // special treatment for Subject
+            $content_replace = str_replace(":", " ", $content);
+            $headers[$head] = $content_replace;
+        }elseif( $head == "Content-Type" ){
+            // do not speak about this header to heactane, just drop it
+        }else{
+            // normal treatment for all other header elements
+            $headers[$head] = $content;        
+        }
+        $logline .= trim($line)."\r\n";
+
+    }
+
+}
+
+// Write the logline(s) on debug step 1
+if( HectaneSettings::get('debug') ){
+    echo $logline;
+    if($logfile !== '')  file_put_contents($logfile, date('Y-m-d H:i:s') . "\r\n" . $logline, FILE_APPEND);
+}
+
+// Execute and return the good or the bad news
+if( $hectanemail = new Hectane($message, $headers, $attachments) ){
+    echo "Mail successfully 'Hectane Wrapped'\r\n";
+    if($logfile !== '')  file_put_contents($logfile, date('Y-m-d H:i:s')."  Mail successfully 'Hectane Wrapped'\r\n", FILE_APPEND);
+    $result = true;
+}else{
+    echo "Sorry, the wrapped mail did not make it to Hectane: ".$hectanemail->errors."\r\n";
+    if($logfile !== '')  file_put_contents($logfile, date('Y-m-d H:i:s')."  Sorry, the wrapped mail did not make it to Hectane: '" . $hectanemail->errors . "\r\n", FILE_APPEND);
+    $result = false;
+}
+
+// Write the logline(s) on debug step 2
+if( HectaneSettings::get('debug') && $hectanemail->email !== "empty" ){
+    var_dump($hectanemail->email);
+    if($logfile !== '')  file_put_contents($logfile, date('Y-m-d H:i:s') . "\r\n" . var_export($hectanemail->email), FILE_APPEND);
+}
+
+return $result;

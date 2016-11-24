@@ -1,0 +1,3 @@
+[mail function]
+;sendmail_path=/usr/sbin/sendmail -t -i
+sendmail_path=/hectane/hectanemail
